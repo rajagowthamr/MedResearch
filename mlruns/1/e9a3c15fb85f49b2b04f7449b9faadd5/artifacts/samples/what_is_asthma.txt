@@ -1,0 +1,2 @@
+User: what is asthma
+Doctor: I am not able to diagnose. Please see a doctor about this.

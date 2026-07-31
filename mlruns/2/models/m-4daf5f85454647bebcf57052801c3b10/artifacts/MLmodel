@@ -1,0 +1,32 @@
+artifact_path: /Users/rajagowtham/Documents/MedResearch/mlruns/2/models/m-4daf5f85454647bebcf57052801c3b10/artifacts
+flavors:
+  python_function:
+    code: code
+    config:
+      device: null
+    data: data
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.pytorch
+    pickle_module_name: mlflow.pytorch.pickle_module
+    python_version: 3.14.4
+  pytorch:
+    code: code
+    model_data: data
+    pytorch_version: 2.13.0
+is_signature_from_type_hint: false
+mlflow_version: 3.14.0
+model_id: m-4daf5f85454647bebcf57052801c3b10
+model_size_bytes: 35746
+model_uuid: m-4daf5f85454647bebcf57052801c3b10
+prompts: null
+run_id: 9ab5513ac972424087a540f559debc6a
+signature:
+  inputs: '[{"name": "idx", "type": "tensor", "tensor-spec": {"dtype": "int64", "shape":
+    [-1, 8]}}]'
+  outputs: '[{"name": "logits", "type": "tensor", "tensor-spec": {"dtype": "float32",
+    "shape": [-1, 8, 10]}}]'
+  params: null
+type_hint_from_example: false
+utc_time_created: '2026-07-29 09:37:06.208633'

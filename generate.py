@@ -1,21 +1,34 @@
+"""Quick CLI sample from a checkpoint.  For the interactive version:
+
+    streamlit run gpt_app.py
+"""
+import glob
+import os
+import sys
+
 import torch
-from model import GPT
+from model import load_checkpoint
 
 device = "mps" if torch.backends.mps.is_available() else "cpu"
 
-# load what we saved during training
-ckpt = torch.load("gpt_medical.pt", map_location=device)
-stoi, itos = ckpt["stoi"], ckpt["itos"]
-encode = lambda s: [stoi[c] for c in s]
-decode = lambda l: "".join(itos[i] for i in l)
+# default to the newest checkpoint; override with: python generate.py <path>
+if len(sys.argv) > 1:
+    path = sys.argv[1]
+else:
+    found = sorted(glob.glob("checkpoints/*.pt") + glob.glob("gpt_medical.pt"),
+                   key=os.path.getmtime, reverse=True)
+    if not found:
+        sys.exit("No checkpoint found — run `python train.py` first.")
+    path = found[0]
 
-model = GPT(ckpt["vocab_size"]).to(device)
-model.load_state_dict(ckpt["model"])
-model.eval()
+# load_checkpoint rebuilds the right architecture from the config inside the
+# file, so this works for v1 and every version after it.
+model, cfg, stoi, itos, meta = load_checkpoint(path, device)
+print(f"{path}  |  {meta.get('version', 'v1')}  |  context {cfg.block_size} chars")
 
-# give it a starting prompt
 prompt = "The patient presented with"
-idx = torch.tensor([encode(prompt)], dtype=torch.long, device=device)
+idx = torch.tensor([[stoi.get(c, stoi.get("�", 0)) for c in prompt]],
+                   dtype=torch.long, device=device)
 
-out = model.generate(idx, max_new_tokens=300)
-print(decode(out[0].tolist()))
+out = model.generate(idx, max_new_tokens=300, temperature=0.8, top_k=40)
+print("".join(itos[i] for i in out[0].tolist()))

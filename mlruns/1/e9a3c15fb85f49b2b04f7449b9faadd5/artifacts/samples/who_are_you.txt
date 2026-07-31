@@ -1,0 +1,2 @@
+User: who are you
+Doctor: I am a small research language model trained on medical reference text.

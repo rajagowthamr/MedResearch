@@ -183,6 +183,7 @@ class GPT(nn.Module):
         top_k = only ever sample from the k most likely next characters.
         """
         self.eval()
+        idx = idx.to(next(self.parameters()).device)   # caller may hand us a CPU tensor
         for _ in range(max_new_tokens):
             idx_cond = idx[:, -self.cfg.block_size:]     # crop to context window
             logits, _ = self(idx_cond)

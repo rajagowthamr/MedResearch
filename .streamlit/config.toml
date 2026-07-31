@@ -1,0 +1,4 @@
+# Keep this project fully local — no usage telemetry to data.streamlit.io.
+# Matters here because the corpus and models are clinical data.
+[browser]
+gatherUsageStats = false
