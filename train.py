@@ -23,6 +23,7 @@ VERSION, re-run.  MLflow keeps both, and the UI lets you overlay their curves.
 Registry needs a database backend, which you already have — MLflow is
 auto-detecting ./mlflow.db, so it works locally with no server.
 """
+import contextlib
 import math
 import os
 import time
@@ -68,8 +69,53 @@ CONFIG = {
     "min_char_freq": 10,           # v1 kept all 1103 chars, incl. ones seen once
 }
 
+# Environment overrides, so a Colab/Kaggle cell can retune without editing this
+# file (a file edit is lost every time the notebook's disk is recycled):
+#   MAX_ITERS=20000 BATCH_SIZE=64 VERSION=v4 python train.py
+# Every override is logged to MLflow via log_params(CONFIG), so a tuned run is
+# still fully reproducible from its run page.
+VERSION = os.environ.get("VERSION", VERSION)
+for _key in CONFIG:
+    _env = os.environ.get(_key.upper())
+    if _env is None:
+        continue
+    _old = CONFIG[_key]
+    # bool() of any non-empty string is True, so "FALSE" would read as True.
+    CONFIG[_key] = (_env.lower() in ("1", "true", "yes") if isinstance(_old, bool)
+                    else type(_old)(_env))
+    print(f"override: {_key} {_old} -> {CONFIG[_key]}")
+
 torch.manual_seed(CONFIG["seed"])
-device = "mps" if torch.backends.mps.is_available() else "cpu"
+
+# cuda FIRST, so this file runs unchanged on a free Colab/Kaggle T4. Without
+# the cuda branch a GPU notebook silently falls through to "cpu" and trains
+# ~40x slower than the Mac it was written on — the worst possible outcome,
+# because nothing errors.
+device = ("cuda" if torch.cuda.is_available()
+          else "mps" if torch.backends.mps.is_available()
+          else "cpu")
+
+# Mixed precision, cuda only. MPS autocast exists but is slower than fp32 for
+# a model this small, and CPU fp16 is pointless.
+#   bf16 (Ampere+: A100, L4, RTX 30xx) needs no loss scaling.
+#   fp16 (T4, P100 — what the free tiers actually give you) does.
+AMP = device == "cuda"
+amp_dtype = (torch.bfloat16 if AMP and torch.cuda.is_bf16_supported()
+             else torch.float16)
+scaler = torch.amp.GradScaler(device, enabled=AMP and amp_dtype is torch.float16)
+autocast = (lambda: torch.autocast(device, dtype=amp_dtype)) if AMP \
+    else contextlib.nullcontext
+if device == "cuda":
+    torch.backends.cuda.matmul.allow_tf32 = True     # free speed on Ampere+
+    torch.backends.cudnn.allow_tf32 = True
+
+# Continue training an existing checkpoint instead of starting from random.
+#   RESUME=checkpoints/gpt_medical_v2-best.pt python train.py
+# NOTE: save_checkpoint() stores weights but NOT optimizer state, so AdamW's
+# moments restart from zero. That is what warmup_iters is for — leave it at a
+# few hundred steps or the first resumed step will kick the model backwards.
+RESUME = os.environ.get("RESUME", "")
+
 CKPT_DIR = "checkpoints"
 os.makedirs(CKPT_DIR, exist_ok=True)
 ckpt_path = os.path.join(CKPT_DIR, f"gpt_medical_{VERSION}.pt")
@@ -112,13 +158,22 @@ cfg = GPTConfig(
 )
 
 
+# Park the whole corpus in GPU memory once: 60M tokens as int16 is 120MB, which
+# is nothing against a T4's 16GB. Otherwise every single step ships 32 CPU
+# slices over PCIe, and on a rented GPU that copy — not the maths — is the
+# bottleneck. Left on CPU for mps/cpu, where there is no transfer to avoid.
+DATA_DEVICE = device if device == "cuda" else "cpu"
+train_data, val_data = train_data.to(DATA_DEVICE), val_data.to(DATA_DEVICE)
+_offsets = torch.arange(cfg.block_size + 1, device=DATA_DEVICE)
+
+
 def get_batch(split):
     d = train_data if split == "train" else val_data
-    ix = torch.randint(len(d) - cfg.block_size - 1, (CONFIG["batch_size"],))
-    x = torch.stack([d[i:i + cfg.block_size] for i in ix])
-    y = torch.stack([d[i + 1:i + cfg.block_size + 1] for i in ix])
-    # .long() here, because embedding lookups need int64
-    return x.to(device).long(), y.to(device).long()
+    ix = torch.randint(len(d) - cfg.block_size - 1, (CONFIG["batch_size"],),
+                       device=DATA_DEVICE)
+    # One vectorised gather instead of batch_size Python slices + a stack.
+    chunk = d[ix[:, None] + _offsets].to(device).long()   # embeddings need int64
+    return chunk[:, :-1].contiguous(), chunk[:, 1:].contiguous()
 
 
 @torch.no_grad()
@@ -128,7 +183,8 @@ def estimate_loss():
     for split in ["train", "val"]:
         losses = torch.zeros(CONFIG["eval_iters"])
         for k in range(CONFIG["eval_iters"]):
-            _, loss = model(*get_batch(split))
+            with autocast():
+                _, loss = model(*get_batch(split))
             losses[k] = loss.item()
         out[split] = losses.mean().item()
     model.train()
@@ -152,6 +208,23 @@ def lr_at(it):
 # 3. BUILD MODEL
 # ------------------------------------------------------------------
 model = GPT(cfg).to(device)
+
+# Warm-start from an earlier checkpoint when RESUME is set. The tokenizer must
+# match exactly: stoi is rebuilt from medical_text.txt above, and if the old
+# checkpoint used a different character->id map then every pretrained embedding
+# now points at the wrong character. Cheaper to refuse than to debug.
+if RESUME:
+    prev_ckpt = torch.load(RESUME, map_location=device, weights_only=False)
+    if prev_ckpt.get("stoi") != stoi:
+        raise SystemExit(
+            f"{RESUME} has a different tokenizer ({prev_ckpt['vocab_size']} vs "
+            f"{vocab_size} tokens). Resuming would scramble the embeddings — "
+            "keep min_char_freq and medical_text.txt identical, or train fresh.")
+    model.load_state_dict(prev_ckpt["model"])
+    model.train()
+    print(f"Resumed {RESUME} (step {prev_ckpt.get('iter')}, "
+          f"val {prev_ckpt.get('val_loss', float('nan')):.4f})")
+
 n_params = model.n_params()
 
 # Decay matrices, not biases/LayerNorms — decaying a bias just biases it to 0.
@@ -178,14 +251,32 @@ with mlflow.start_run(run_name=f"{VERSION}-b{cfg.block_size}-e{cfg.n_embd}-l{cfg
     mlflow.log_params(CONFIG)
     mlflow.log_params({
         "device": device,
+        "gpu": torch.cuda.get_device_name(0) if device == "cuda" else device,
+        "precision": str(amp_dtype).replace("torch.", "") if AMP else "float32",
+        "resumed_from": RESUME or "scratch",
         "vocab_size": vocab_size,
         "total_chars": len(data),
         "n_params_millions": round(n_params / 1e6, 3),
         "tokens_per_step": CONFIG["batch_size"] * cfg.block_size,
     })
 
+    # Seed best_val from any checkpoint ALREADY at this path, so a re-run can
+    # only replace it by genuinely beating it.
+    #
+    # Why this matters: best_val used to start at inf every run, and the very
+    # first eval is at step 0 — where the model is random. So simply re-running
+    # train.py without bumping VERSION overwrote a finished 51-minute model
+    # with random weights before completing a single step. Bump VERSION (or
+    # delete the file) when you want a clean slate.
     best_val = float("inf")
     best_iter = -1
+    if os.path.exists(ckpt_path):
+        prev = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        best_val = prev.get("val_loss", float("inf"))
+        best_iter = prev.get("iter", -1)
+        print(f"NOTE: {ckpt_path} already holds val {best_val:.4f} "
+              f"(step {best_iter}). This run will only overwrite it on a better "
+              f"val_loss. Bump VERSION for a fresh file.")
     t0 = time.time()
 
     for it in range(CONFIG["max_iters"] + 1):
@@ -219,11 +310,16 @@ with mlflow.start_run(run_name=f"{VERSION}-b{cfg.block_size}-e{cfg.n_embd}-l{cfg
             break
 
         xb, yb = get_batch("train")
-        _, loss = model(xb, yb)
+        with autocast():
+            _, loss = model(xb, yb)
         optimizer.zero_grad(set_to_none=True)
-        loss.backward()
+        scaler.scale(loss).backward()
+        # Unscale BEFORE clipping: clipping fp16-scaled grads would compare them
+        # against the wrong threshold and effectively disable grad_clip.
+        scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), CONFIG["grad_clip"])
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
 
     mins = (time.time() - t0) / 60
     mlflow.log_metrics({

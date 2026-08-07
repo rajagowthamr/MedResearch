@@ -23,6 +23,7 @@ THE TWO THINGS THAT MAKE FINE-TUNING WORK
 
 Run:  python chat_data.py && python finetune.py
 """
+import contextlib
 import math
 import os
 import time
@@ -61,7 +62,17 @@ CONFIG = {
 }
 
 torch.manual_seed(CONFIG["seed"])
-device = "mps" if torch.backends.mps.is_available() else "cpu"
+# Same three-way pick as train.py, so this runs unchanged on a free Colab or
+# Kaggle GPU instead of silently falling through to cpu.
+device = ("cuda" if torch.cuda.is_available()
+          else "mps" if torch.backends.mps.is_available()
+          else "cpu")
+AMP = device == "cuda"
+amp_dtype = (torch.bfloat16 if AMP and torch.cuda.is_bf16_supported()
+             else torch.float16)
+scaler = torch.amp.GradScaler(device, enabled=AMP and amp_dtype is torch.float16)
+autocast = (lambda: torch.autocast(device, dtype=amp_dtype)) if AMP \
+    else contextlib.nullcontext
 ckpt_path = f"checkpoints/gpt_medical_{VERSION}.pt"
 
 # ------------------------------------------------------------------
@@ -146,7 +157,8 @@ def estimate_loss():
         losses = torch.zeros(CONFIG["eval_iters"])
         for k in range(CONFIG["eval_iters"]):
             x, y = sample(src, CONFIG["batch_size"])
-            _, loss = model(x.to(device), y.to(device))
+            with autocast():
+                _, loss = model(x.to(device), y.to(device))
             losses[k] = loss.item()
         out[name] = losses.mean().item()
     model.train()
@@ -237,11 +249,15 @@ with mlflow.start_run(run_name=f"{VERSION}-finetune"):
             break
 
         x, y = get_batch()
-        _, loss = model(x, y)
+        with autocast():
+            _, loss = model(x, y)
         optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), CONFIG["grad_clip"])
-        optimizer.step()
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)      # unscale before clipping, or the
+        torch.nn.utils.clip_grad_norm_( # threshold is compared against
+            model.parameters(), CONFIG["grad_clip"])   # fp16-scaled grads
+        scaler.step(optimizer)
+        scaler.update()
 
     mlflow.log_metric("best_chat_val_loss", best)
     print(f"\nBest chat loss {best:.4f} -> {ckpt_path}")

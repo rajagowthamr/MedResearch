@@ -326,7 +326,7 @@ def chat_reply(transcript, temperature, top_k, max_new=200):
     exactly what it has learned to do. The stop is what turns a text
     continuer into something that takes turns.
     """
-    idx = encode(transcript).unsqueeze(0)
+    idx = encode(transcript, stoi).unsqueeze(0)
     out = ""
     for nxt in model.stream(idx, max_new, temperature, top_k):
         out += itos[nxt.item()]
