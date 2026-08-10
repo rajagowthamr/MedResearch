@@ -212,7 +212,11 @@ with mlflow.start_run(run_name=f"{VERSION}-finetune"):
                      "base_run": base_meta.get("version", "v2")})
     mlflow.log_params(CONFIG)
     mlflow.log_params({"device": device, "vocab_size": cfg.vocab_size,
-                       "chat_chars": len(chat_ids)})
+                       "chat_chars": len(chat_train),
+                       "holdout_chars": len(chat_val),
+                       "medical_mixin_chars": len(med_ids),
+                       "chat_per_batch": n_chat, "medical_per_batch": n_med,
+                       "chat_epochs": round(epochs, 1)})
 
     best = float("inf")
     t0 = time.time()
