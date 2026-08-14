@@ -24,6 +24,8 @@ Run:  python chat_data.py   ->  writes chat_data.txt
 import itertools
 import random
 
+from medresearch import config
+
 random.seed(1337)
 
 # Each entry: (list of ways a user might say it, list of acceptable replies).
@@ -127,17 +129,18 @@ def build():
 
     random.shuffle(convos)
     text = "\n".join(convos)
-    with open("chat_data.txt", "w") as f:
+    config.ensure_dirs()
+    with open(config.CHAT_DATA, "w") as f:
         f.write(text)
-    with open("chat_holdout.txt", "w") as f:
+    with open(config.CHAT_HOLDOUT, "w") as f:
         f.write("\n".join(holdout))
-    print(f"chat_data.txt    : {len(convos)} dialogues, {len(text):,} chars")
-    print(f"chat_holdout.txt : {len(holdout)} dialogues on UNSEEN phrasings")
+    print(f"{config.CHAT_DATA.name:17s}: {len(convos)} dialogues, {len(text):,} chars")
+    print(f"{config.CHAT_HOLDOUT.name:17s}: {len(holdout)} dialogues on UNSEEN phrasings")
 
     # The number that actually predicts memorisation: how many DISTINCT
     # sentences the model has to reproduce. Count per line — counting per
     # dialogue would include multi-turn tails and inflate the figure.
-    lines = [l for l in text.split("\n") if l.startswith("Doctor: ")]
+    lines = [ln for ln in text.split("\n") if ln.startswith("Doctor: ")]
     print(f"Doctor lines: {len(lines)}, unique: {len(set(lines))}")
     print(f"  ^ THIS is the memorisation ceiling. The model can only ever "
           f"recite these {len(set(lines))} sentences.")

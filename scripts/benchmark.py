@@ -36,16 +36,16 @@ correct continuation to compare against. These are the metrics that do apply:
 
 Every metric goes to MLflow under its own run so versions stay comparable.
 """
-import glob
 import math
 import os
 import sys
 import time
 
-import torch
 import mlflow
+import torch
 
-from model import load_checkpoint
+from medresearch import config
+from medresearch.gpt import load_checkpoint
 
 DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
 HELDOUT_CHARS = 400_000          # from the tail of the corpus = the val split
@@ -56,8 +56,8 @@ LN2 = math.log(2)
 def heldout_text():
     """Tail of the corpus — inside train.py's 10% validation split, so no
     checkpoint has ever trained on it."""
-    size = os.path.getsize("medical_text.txt")
-    with open("medical_text.txt", errors="ignore") as f:
+    size = os.path.getsize(config.MEDICAL_TEXT)
+    with open(config.MEDICAL_TEXT, errors="ignore") as f:
         f.seek(max(0, size - HELDOUT_CHARS * 2))
         tail = f.read()
     return tail[len(tail) // 2:]
@@ -163,10 +163,10 @@ def run(path, text):
 
 
 if __name__ == "__main__":
-    paths = sys.argv[1:] or (sorted(glob.glob("checkpoints/*.pt"))
-                             + (["gpt_medical.pt"] if os.path.exists("gpt_medical.pt") else []))
+    paths = sys.argv[1:] or [str(p) for p in config.find_checkpoints()]
     text = heldout_text()
-    mlflow.set_experiment("medresearch-gpt-benchmark")
+    mlflow.set_tracking_uri(config.MLFLOW_TRACKING_URI)
+    mlflow.set_experiment(f"{config.EXPERIMENT_NAME}-benchmark")
 
     rows = []
     for p in paths:

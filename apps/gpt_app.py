@@ -21,7 +21,6 @@ predict it, check the answer.
                    This is exp(val_loss) — the same loss curve in the MLflow
                    UI, just in units you can reason about.
 """
-import glob
 import hashlib
 import math
 import os
@@ -31,7 +30,8 @@ import pandas as pd
 import streamlit as st
 import torch
 
-from model import load_checkpoint
+from medresearch import config
+from medresearch.gpt import load_checkpoint
 
 # Prompts that suit this model. It is a CONTINUATION model trained on
 # encyclopedic medical text, not a chatbot — so each one is the opening of a
@@ -56,10 +56,7 @@ VAL_TAIL_CHARS = 400_000        # sample the exam from the end of the corpus,
 # ------------------------------------------------------------------
 def find_checkpoints():
     """Newest first. Includes the v1 file that lives in the project root."""
-    paths = sorted(glob.glob("checkpoints/*.pt"))
-    if os.path.exists("gpt_medical.pt"):
-        paths.append("gpt_medical.pt")          # the original v1 model
-    return sorted(paths, key=os.path.getmtime, reverse=True)
+    return [str(p) for p in config.find_checkpoints()]
 
 
 @st.cache_data(show_spinner=False)
@@ -87,8 +84,8 @@ def load(path):
 @st.cache_data(show_spinner=False)
 def load_heldout():
     """Tail of the corpus = data the model was validated on, never trained on."""
-    size = os.path.getsize("medical_text.txt")
-    with open("medical_text.txt", "r", errors="ignore") as f:
+    size = os.path.getsize(config.MEDICAL_TEXT)
+    with open(config.MEDICAL_TEXT, errors="ignore") as f:
         f.seek(max(0, size - VAL_TAIL_CHARS * 2))
         tail = f.read()
     return tail[len(tail) // 2:]                # skip any partial char at the seek

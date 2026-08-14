@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "medresearch"
+version = "0.5.0"
+description = "Clinical language modelling: a from-scratch GPT and a Random Forest baseline"
+requires-python = ">=3.12"
+
+# Runtime deps for the library itself (src/medresearch). Deliberately NOT the
+# whole of requirements.txt: importing medresearch.gpt.model must not drag in
+# streamlit or kagglehub. The heavier, task-specific sets live in the extras
+# below, so the GPU box installs `.[train]` and never pulls a UI framework.
+dependencies = [
+    "torch>=2.13",
+    "numpy>=2.5",
+]
+
+[project.optional-dependencies]
+train = ["mlflow>=3.14"]
+apps = ["streamlit>=1.59", "pandas>=2.3"]
+rf = ["scikit-learn>=1.9", "joblib>=1.5", "pandas>=2.3"]
+fetch = ["datasets>=5.0", "kagglehub>=1.0"]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+# src/ layout: the package is NOT importable from the repo root unless it has
+# been installed (`pip install -e .`). That is the point -- it makes an
+# accidental `import medresearch` that only works because you happened to be
+# cd'd into the repo impossible, which is the failure mode the old flat layout
+# had with `from model import GPT`.
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Tests that need the 58MB corpus or a trained checkpoint are marked so CI can
+# skip them:  pytest -m "not requires_data"
+markers = [
+    "requires_data: needs a corpus file under data/ to be present",
+    "requires_checkpoint: needs a trained .pt checkpoint to be present",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "scripts", "tools", "apps", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+# Deliberate style in this codebase, not oversights:
+#   B905  zip(..., strict=) -- the call sites pair a model's classes_ with its
+#         predict_proba output, which are equal length by construction; adding
+#         strict= would assert something sklearn already guarantees.
+#   E731  the assigned lambdas are one-line context-manager factories
+#         (autocast = lambda: torch.autocast(...)), where a def is noisier.
+ignore = ["B905", "E731"]
+
+[tool.ruff.lint.per-file-ignores]
+# Notebook cells legitimately import after prose/setup cells.
+"notebooks/*" = ["E402"]

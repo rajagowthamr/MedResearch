@@ -27,6 +27,8 @@ import random
 
 from datasets import load_dataset
 
+from medresearch import config
+
 random.seed(1337)
 
 # Fold characters absent from v2's vocab onto ones it knows. Verified against
@@ -70,9 +72,10 @@ def build():
     # with no code change.
     # ------------------------------------------------------------------
     corpus = "\n\n".join(r["note"] for r in rows)
-    with open("transcriptions.txt", "w") as f:
+    config.ensure_dirs()
+    with open(config.TRANSCRIPTIONS, "w") as f:
         f.write(corpus)
-    print(f"transcriptions.txt : {len(corpus):,} chars "
+    print(f"{config.TRANSCRIPTIONS.name:18s}: {len(corpus):,} chars "
           f"({len(corpus)/1_000_000:.1f} MB) of real clinical notes")
 
     # ------------------------------------------------------------------
@@ -94,7 +97,7 @@ def build():
         by_spec.setdefault(r["spec"], []).append(r)
 
     train, val = [], []
-    for spec, group in sorted(by_spec.items()):
+    for _spec, group in sorted(by_spec.items()):
         group = group[:]
         random.shuffle(group)
         # max(1, ...) would steal the only example from 6-note specialties,
@@ -113,10 +116,10 @@ def build():
                 f"DESC: {r['desc']}\n"
                 f"NOTE: {r['note']}\n")
 
-    for name, split in (("note_train.txt", train), ("note_val.txt", val)):
-        with open(name, "w") as f:
+    for path, split in ((config.NOTE_TRAIN, train), (config.NOTE_VAL, val)):
+        with open(path, "w") as f:
             f.write("\n".join(fmt(r) for r in split))
-        print(f"{name:16s} : {len(split)} notes")
+        print(f"{path.name:16s} : {len(split)} notes")
 
     print(f"\nSpecialties: {len(by_spec)}. Heavily imbalanced — "
           f"{max(len(g) for g in by_spec.values())} notes in the largest, "

@@ -1,0 +1,27 @@
+# Direct dependencies only, pinned to what the Mac venv runs today.
+#
+# On Linux x86_64 `pip install torch` already ships a CUDA-enabled wheel with
+# the CUDA runtime bundled — you do NOT need a system CUDA toolkit, only the
+# NVIDIA driver (check with nvidia-smi). Do not add an --index-url unless you
+# specifically need a different CUDA version than the default.
+#
+#   python3 -m venv venv && source venv/bin/activate
+#   pip install -r requirements.txt
+
+torch==2.13.0
+
+# training: experiment tracking + model registry
+mlflow==3.14.0
+
+# both Streamlit UIs (gpt_app.py, app.py)
+streamlit==1.59.2
+pandas==2.3.3
+numpy==2.5.1
+
+# the Random Forest track (build-model.py, app.py)
+scikit-learn==1.9.0
+joblib==1.5.3
+
+# data fetching — only needed to rebuild the corpora from scratch
+datasets==5.0.0
+kagglehub==1.0.2

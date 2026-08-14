@@ -38,9 +38,10 @@ TWO IMPLEMENTATION DETAILS THAT MATTER
 """
 import collections
 import json
-import os
 import re
 import sys
+
+from medresearch import config
 
 # GPT-2's pre-tokenization pattern: keeps a leading space attached to a word
 # (" patient" is one chunk), and splits letters / digits / punctuation apart.
@@ -196,11 +197,11 @@ if __name__ == "__main__":
     vocab_size = int(sys.argv[1]) if len(sys.argv) > 1 else 4096
     sample = int(sys.argv[2]) if len(sys.argv) > 2 else 10_000_000
 
-    with open("medical_text.txt", errors="ignore") as f:
+    with open(config.MEDICAL_TEXT, errors="ignore") as f:
         text = f.read(sample)
 
     tok = BPETokenizer.train(text, vocab_size)
-    tok.save("tokenizer.json")
+    tok.save(config.TOKENIZER_JSON)
 
     # --- the numbers that justify the whole exercise ---
     probe = text[:200_000]

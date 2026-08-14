@@ -1,5 +1,7 @@
 from datasets import load_dataset
 
+from medresearch import config
+
 # ------------------------------------------------------------------
 # Download a medical-text dataset from Hugging Face and write it all
 # into medical_text.txt (which train.py reads).
@@ -16,7 +18,8 @@ print(f"Got {len(ds)} articles.")
 texts = [row["page_text"] for row in ds if row["page_text"]]
 all_text = "\n\n".join(texts)
 
-with open("medical_text.txt", "w") as f:
+config.ensure_dirs()
+with open(config.MEDICAL_TEXT, "w") as f:
     f.write(all_text)
 
 print(f"Wrote {len(all_text):,} characters "

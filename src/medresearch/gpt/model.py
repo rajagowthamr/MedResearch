@@ -22,8 +22,9 @@ What changed from v1, and WHY:
     checkpoint describes itself and old versions stay loadable forever.
  6. generate() takes temperature / top_k, and can stream token by token.
 """
-from dataclasses import dataclass, asdict, field
 import math
+from dataclasses import asdict, dataclass
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F

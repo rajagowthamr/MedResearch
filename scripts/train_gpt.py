@@ -28,21 +28,29 @@ import math
 import os
 import time
 
+import mlflow
 import numpy as np
 import torch
-import mlflow
 from mlflow import MlflowClient
 from mlflow.models import ModelSignature
 from mlflow.types import Schema, TensorSpec
 
-from model import GPT, GPTConfig, ARCH_VERSION, save_checkpoint
+from medresearch import config
+from medresearch.gpt import ARCH_VERSION, GPT, GPTConfig, save_checkpoint
+from medresearch.gpt.data import (
+    BatchSampler,
+    build_char_vocab,
+    encode_corpus,
+    read_text,
+    split_train_val,
+)
 
 # ------------------------------------------------------------------
 # 1. CONFIG  -  every knob in ONE place.
 #    Change these, bump VERSION, re-run = a new registered model version.
 # ------------------------------------------------------------------
-MODEL_NAME = "medresearch-gpt"     # the name in the MLflow Model Registry
-VERSION = "v2"                     # your label for this attempt
+MODEL_NAME = config.REGISTERED_MODEL_NAME   # the name in the MLflow Model Registry
+VERSION = "v2"                              # your label for this attempt
 
 CONFIG = {
     # ---- training ----
@@ -116,38 +124,19 @@ if device == "cuda":
 # few hundred steps or the first resumed step will kick the model backwards.
 RESUME = os.environ.get("RESUME", "")
 
-CKPT_DIR = "checkpoints"
-os.makedirs(CKPT_DIR, exist_ok=True)
-ckpt_path = os.path.join(CKPT_DIR, f"gpt_medical_{VERSION}.pt")
+config.ensure_dirs()
+ckpt_path = str(config.checkpoint_path(VERSION))
 
 # ------------------------------------------------------------------
 # 2. DATA + TOKENIZER
 # ------------------------------------------------------------------
-with open("medical_text.txt", "r") as f:
-    text = f.read()
+text = read_text(config.require(
+    config.MEDICAL_TEXT, "Build it with: python tools/fetch_wiki_medical.py"))
 
-# Codepoints in one vectorised shot instead of a 60M-iteration Python loop.
-codepoints = np.frombuffer(text.encode("utf-32-le"), dtype=np.uint32)
-uniq, counts = np.unique(codepoints, return_counts=True)
-
-# Prune the long tail: characters seen fewer than min_char_freq times are
-# stray unicode from the scrape.  v1 spent embedding capacity on ~700 of them.
-keep = uniq[counts >= CONFIG["min_char_freq"]]
-chars = [chr(c) for c in keep] + ["�"]          # last slot = "unknown"
+chars, stoi, itos = build_char_vocab(text, CONFIG["min_char_freq"])
 vocab_size = len(chars)
-stoi = {c: i for i, c in enumerate(chars)}
-itos = {i: c for i, c in enumerate(chars)}
-unk_id = stoi["�"]
-
-lut = np.full(int(uniq.max()) + 1, unk_id, dtype=np.int16)   # codepoint -> token id
-for c, i in stoi.items():
-    if ord(c) < len(lut):
-        lut[ord(c)] = i
-
-# int16 not int64: 60M tokens is 120MB instead of 480MB of RAM.
-data = torch.from_numpy(lut[codepoints])
-n = int(0.9 * len(data))
-train_data, val_data = data[:n], data[n:]
+data = encode_corpus(text, stoi)
+train_data, val_data = split_train_val(data)
 print(f"vocab: {vocab_size} chars (v1 had 1103) | tokens: {len(data)/1e6:.1f}M")
 
 cfg = GPTConfig(
@@ -158,22 +147,10 @@ cfg = GPTConfig(
 )
 
 
-# Park the whole corpus in GPU memory once: 60M tokens as int16 is 120MB, which
-# is nothing against a T4's 16GB. Otherwise every single step ships 32 CPU
-# slices over PCIe, and on a rented GPU that copy — not the maths — is the
-# bottleneck. Left on CPU for mps/cpu, where there is no transfer to avoid.
-DATA_DEVICE = device if device == "cuda" else "cpu"
-train_data, val_data = train_data.to(DATA_DEVICE), val_data.to(DATA_DEVICE)
-_offsets = torch.arange(cfg.block_size + 1, device=DATA_DEVICE)
-
-
-def get_batch(split):
-    d = train_data if split == "train" else val_data
-    ix = torch.randint(len(d) - cfg.block_size - 1, (CONFIG["batch_size"],),
-                       device=DATA_DEVICE)
-    # One vectorised gather instead of batch_size Python slices + a stack.
-    chunk = d[ix[:, None] + _offsets].to(device).long()   # embeddings need int64
-    return chunk[:, :-1].contiguous(), chunk[:, 1:].contiguous()
+# BatchSampler parks the corpus on the GPU once and gathers windows there --
+# see medresearch/gpt/data.py for why that matters on a rented box.
+get_batch = BatchSampler(train_data, val_data, cfg.block_size,
+                         CONFIG["batch_size"], device)
 
 
 @torch.no_grad()
@@ -240,7 +217,12 @@ print(f"Device: {device} | Parameters: {n_params/1e6:.2f}M | arch {ARCH_VERSION}
 # ------------------------------------------------------------------
 # 4. TRAIN INSIDE AN MLFLOW RUN
 # ------------------------------------------------------------------
-mlflow.set_experiment("medresearch-gpt")
+# Set the URI explicitly. Relying on MLflow to auto-detect ./mlflow.db means a
+# run launched from a different working directory silently starts a NEW file
+# store: training "succeeds", the registry step fails, and the run never appears
+# beside the others.
+mlflow.set_tracking_uri(config.MLFLOW_TRACKING_URI)
+mlflow.set_experiment(config.EXPERIMENT_NAME)
 
 with mlflow.start_run(run_name=f"{VERSION}-b{cfg.block_size}-e{cfg.n_embd}-l{cfg.n_layer}"):
     mlflow.set_tags({
@@ -348,7 +330,9 @@ with mlflow.start_run(run_name=f"{VERSION}-b{cfg.block_size}-e{cfg.n_embd}-l{cfg
         mlflow.pytorch.log_model(
             model, name="model",
             registered_model_name=MODEL_NAME,
-            code_paths=["model.py"],          # so the class can be rebuilt later
+            # Ship the whole package, not just model.py: the pickle references
+            # medresearch.gpt.model, so a bare model.py would not re-import.
+            code_paths=[str(config.PROJECT_ROOT / "src" / "medresearch")],
             signature=signature,
             serialization_format="pickle",    # pt2 can't trace a (logits, loss) return
         )

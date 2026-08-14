@@ -28,14 +28,15 @@ import math
 import os
 import time
 
+import mlflow
 import numpy as np
 import torch
-import mlflow
 from mlflow import MlflowClient
 from mlflow.models import ModelSignature
 from mlflow.types import Schema, TensorSpec
 
-from model import load_checkpoint, save_checkpoint
+from medresearch import config
+from medresearch.gpt import load_checkpoint, save_checkpoint
 
 MODEL_NAME = "medresearch-gpt"
 BASE = "checkpoints/gpt_medical_v2.pt"     # the model we start from
@@ -73,7 +74,8 @@ amp_dtype = (torch.bfloat16 if AMP and torch.cuda.is_bf16_supported()
 scaler = torch.amp.GradScaler(device, enabled=AMP and amp_dtype is torch.float16)
 autocast = (lambda: torch.autocast(device, dtype=amp_dtype)) if AMP \
     else contextlib.nullcontext
-ckpt_path = f"checkpoints/gpt_medical_{VERSION}.pt"
+config.ensure_dirs()
+ckpt_path = str(config.checkpoint_path(VERSION))
 
 # ------------------------------------------------------------------
 # 1. LOAD v2  -  weights, architecture AND tokenizer all come from the file
@@ -93,12 +95,12 @@ encode = lambda s: torch.tensor([stoi.get(c, unk) for c in s], dtype=torch.long)
 # ------------------------------------------------------------------
 # 2. DATA  -  chat + a slice of the original corpus to mix back in
 # ------------------------------------------------------------------
-if not os.path.exists("chat_data.txt"):
-    raise SystemExit("chat_data.txt not found — run `python chat_data.py` first.")
-chat_text = open("chat_data.txt").read()
+if not config.CHAT_DATA.exists():
+    raise SystemExit(f"{config.CHAT_DATA} not found — run `python tools/build_chat_data.py` first.")
+chat_text = open(config.CHAT_DATA).read()
 
 # A slice of medical text big enough to keep the language knowledge alive.
-with open("medical_text.txt", errors="ignore") as f:
+with open(config.require(config.MEDICAL_TEXT), errors="ignore") as f:
     med_text = f.read(8_000_000)
 
 chat_train = encode(chat_text)
@@ -109,9 +111,9 @@ med_ids = encode(med_text)
 # every dialogue in it draws from the same small pool of replies, so a random
 # split shares target strings with the training data and reports memorisation
 # as if it were generalisation.
-if not os.path.exists("chat_holdout.txt"):
-    raise SystemExit("chat_holdout.txt missing — re-run `python chat_data.py`.")
-chat_val = encode(open("chat_holdout.txt").read())
+if not config.CHAT_HOLDOUT.exists():
+    raise SystemExit(f"{config.CHAT_HOLDOUT} missing — re-run `python tools/build_chat_data.py`.")
+chat_val = encode(open(config.CHAT_HOLDOUT).read())
 
 epochs = (CONFIG["max_iters"] * int(CONFIG["batch_size"] * CONFIG["chat_fraction"])
           * cfg.block_size / max(len(chat_train), 1))

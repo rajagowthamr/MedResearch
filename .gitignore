@@ -1,0 +1,58 @@
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+venv/
+.venv/
+env/
+
+# ---------------------------------------------------------------------------
+# Tooling
+# ---------------------------------------------------------------------------
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# ---------------------------------------------------------------------------
+# OS / editor
+# ---------------------------------------------------------------------------
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# ---------------------------------------------------------------------------
+# Run output
+# ---------------------------------------------------------------------------
+*.log
+nohup.out
+
+# ---------------------------------------------------------------------------
+# Large artifacts
+#
+# NOTE: data/, models/, checkpoints/, mlruns/ and mlflow.db are ALREADY tracked
+# in this repo -- that is why .git is 245MB and why the GPU box needed a
+# --depth 1 clone. Listing them here stops NEW ones being added; it does not
+# untrack the existing files (gitignore only applies to untracked paths).
+#
+# Untracking them is a separate, history-rewriting decision. If you want it:
+#   git rm -r --cached data models checkpoints mlruns mlflow.db
+#   git commit -m "stop tracking large artifacts"
+# That leaves the files on disk and drops them from FUTURE commits, but the
+# 245MB stays in history until the history itself is rewritten (git-filter-repo).
+# ---------------------------------------------------------------------------
+data/
+models/
+checkpoints/
+mlruns/
+mlflow.db
+*.pt
+*.pkl
